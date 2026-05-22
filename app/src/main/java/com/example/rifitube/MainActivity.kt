@@ -1,4 +1,4 @@
-package com.example.rifitube
+package com.rifitube.app
 
 import android.app.DownloadManager
 import android.content.Context
@@ -13,10 +13,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.os.Build
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.core.app.NotificationCompat
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.background
@@ -24,9 +29,23 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.VideoFile
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Facebook
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -48,11 +67,13 @@ import org.json.JSONObject
 import org.json.JSONArray
 import java.net.HttpURLConnection
 import java.net.URL
+private const val API_BASE_URL = "https://rifitubeserver.onrender.com"
 data class DownloadItem(
     val title: String,
     val format: String,
     val thumbnail: String,
     val size: String,
+    val duration: String = "00:00",
     val url: String,
 
     val downloadId: Long = 0L,
@@ -72,12 +93,14 @@ fun saveDownloads(context: Context, downloads: List<DownloadItem>) {
         obj.put("format", item.format)
         obj.put("thumbnail", item.thumbnail)
         obj.put("size", item.size)
+        obj.put("duration", item.duration)
         obj.put("url", item.url)
         obj.put("downloadId", item.downloadId)
         obj.put("fileName", item.fileName)
         obj.put("progress", item.progress)
         obj.put("speed", item.speed)
         obj.put("remaining", item.remaining)
+        obj.put("paused", item.paused)
         array.put(obj)
     }
 
@@ -110,6 +133,7 @@ fun loadDownloads(context: Context): MutableList<DownloadItem> {
                     format = obj.getString("format"),
                     thumbnail = obj.getString("thumbnail"),
                     size = obj.getString("size"),
+                    duration = obj.optString("duration", "00:00"),
                     url = obj.getString("url"),
 
                     downloadId = obj.optLong("downloadId", 0L),
@@ -146,6 +170,21 @@ fun RifiTubeApp() {
     var showOptions by remember { mutableStateOf(false) }
     var currentPage by remember { mutableStateOf("Home") }
     var selectedFormat by remember { mutableStateOf("Classic MP3") }
+    val prefs =
+        context.getSharedPreferences(
+            "rifitube_settings",
+            Context.MODE_PRIVATE
+        )
+    var language by remember {
+        mutableStateOf(
+            prefs.getString("language", "English") ?: "English"
+        )
+    }
+    var darkMode by remember {
+        mutableStateOf(
+            prefs.getBoolean("dark_mode", true)
+        )
+    }
 
     var thumbnail by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -165,6 +204,19 @@ fun RifiTubeApp() {
 
     var videoTitle by remember { mutableStateOf("RifiTube Video") }
     var thumbnailUrl by remember { mutableStateOf("") }
+    var videoDuration by remember { mutableStateOf("00:00") }
+    var videoSize by remember { mutableStateOf("Unknown") }
+
+    var videoInfo by remember {
+        mutableStateOf(
+            VideoInfo(
+                title = "RifiTube Video",
+                thumbnail = "",
+                duration = "00:00",
+                size = "Unknown"
+            )
+        )
+    }
     LaunchedEffect(Unit) {
         val clipboard =
             context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -194,11 +246,14 @@ fun RifiTubeApp() {
 
             delay(800)
 
-            val info = getVideoInfo(videoLink)
+            videoInfo = getVideoInfo(videoLink)
+            val info = videoInfo
 
-            videoTitle = info.first
-            thumbnailUrl = info.second
-            thumbnail = info.second
+            videoTitle = info.title
+            thumbnailUrl = info.thumbnail
+            thumbnail = info.thumbnail
+            videoDuration = info.duration
+            videoSize = info.size
         }
     }
 
@@ -207,11 +262,18 @@ fun RifiTubeApp() {
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF050816),
-                        Color(0xFF10112A),
-                        Color(0xFF1A1240)
-                    )
+                    colors = if (darkMode)
+                        listOf(
+                            Color(0xFF050816),
+                            Color(0xFF10112A),
+                            Color(0xFF1A1240)
+                        )
+                    else
+                        listOf(
+                            Color(0xFFF5F7FF),
+                            Color(0xFFE8ECFF),
+                            Color(0xFFDDE5FF)
+                        )
                 )
             )
             .padding(18.dp)
@@ -219,17 +281,28 @@ fun RifiTubeApp() {
 
         if (currentPage == "Downloads") {
 
-            DownloadsPage(downloads) { item ->
+            DownloadsPage(downloads, language) { item ->
                 downloads.remove(item)
                 saveDownloads(context, downloads)
             }
         } else if (currentPage == "History") {
 
-            HistoryPage(history)
+            HistoryPage(history, language)
 
         } else if (currentPage == "Settings") {
 
             SettingsPage(
+                language = language,
+                onLanguageChange = { language = it },
+                darkMode = darkMode,
+                onDarkModeChange = {
+
+                    darkMode = it
+
+                    prefs.edit()
+                        .putBoolean("dark_mode", it)
+                        .apply()
+                },
                 onClearHistory = {
                     history = emptyList()
                 }
@@ -237,12 +310,15 @@ fun RifiTubeApp() {
 
         } else {
             HomePage(
+                language = language,
                 videoLink = videoLink,
                 onLinkChange = { videoLink = it },
                 platform = platform,
                 title = videoTitle,
                 thumbnail = thumbnailUrl,
                 isLoading = isLoading,
+                duration = videoDuration,
+                size = videoSize,
                 prepareProgress = prepareProgress,
 
                 onDownloadClick = {
@@ -261,9 +337,14 @@ fun RifiTubeApp() {
 
                         showOptions = true
                     }
+                },
+
+                onMp3Click = {
+                    selectedFormat = "Classic MP3"
                 }
             )
         }
+
     }
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -272,6 +353,7 @@ fun RifiTubeApp() {
 
         BottomNav(
             currentPage = currentPage,
+            language = language,
             onPageChange = { currentPage = it },
             modifier = Modifier
                 .fillMaxWidth()
@@ -295,7 +377,10 @@ fun RifiTubeApp() {
                 title = videoTitle,
                 site = platform,
                 thumbnail = thumbnailUrl,
+                duration = videoDuration,
+                size = videoSize,
                 selected = selectedFormat,
+
 
                 onSelect = {
                     selectedFormat = it
@@ -349,21 +434,10 @@ fun RifiTubeApp() {
                                 format = selectedFormat,
                                 thumbnail = thumbnailUrl,
 
-                                size =
-                                    if (selectedFormat.contains("720"))
-                                        "13.9 MB"
-
-                                    else if (selectedFormat.contains("360"))
-                                        "5.0 MB"
-
-                                    else if (selectedFormat.contains("Classic"))
-                                        "5.2 MB"
-
-                                    else
-                                        "4.6 MB",
+                                size = videoInfo.size,
+                                duration = videoDuration,
 
                                 url = finalUrl,
-
                                 downloadId = downloadId,
                                 fileName = fileName,
 
@@ -397,15 +471,20 @@ fun RifiTubeApp() {
 }
 @Composable
 fun HomePage(
+    language: String,
     videoLink: String,
     onLinkChange: (String) -> Unit,
     platform: String,
     title: String,
     thumbnail: String,
+    duration: String,
+    size: String,
     isLoading: Boolean,
     prepareProgress: Int,
-    onDownloadClick: () -> Unit
+    onDownloadClick: () -> Unit,
+    onMp3Click: () -> Unit
 ) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -448,7 +527,7 @@ fun HomePage(
                 Spacer(modifier = Modifier.height(20.dp))
 
                 Text(
-                    "Search anything",
+                    tr(language, "search_anything"),
                     color = Color.White,
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold
@@ -457,7 +536,7 @@ fun HomePage(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    "YouTube videos, MP3 songs,\nInstagram stories, Facebook videos",
+                    text = tr(language, "subtitle"),
                     color = Color.Gray,
                     fontSize = 14.sp
                 )
@@ -483,7 +562,14 @@ fun HomePage(
                 )
 
                 Spacer(modifier = Modifier.height(20.dp))
-
+                val borderColor by animateColorAsState(
+                    targetValue =
+                        if (videoLink.isNotBlank())
+                            Color(0xFFB84CFF)
+                        else
+                            Color(0xFF4FC3F7),
+                    label = ""
+                )
                 OutlinedTextField(
                     value = videoLink,
                     onValueChange = onLinkChange,
@@ -499,8 +585,8 @@ fun HomePage(
                     singleLine = true,
                     shape = RoundedCornerShape(18.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFFB84CFF),
-                        unfocusedBorderColor = Color(0xFF4FC3F7),
+                        focusedBorderColor = borderColor,
+                        unfocusedBorderColor = borderColor,
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
                         cursorColor = Color.White
@@ -521,14 +607,20 @@ fun HomePage(
                     Spacer(modifier = Modifier.height(14.dp))
 
                     VideoPreviewCard(
+                        language = language,
                         title = title,
-                        thumbnail = thumbnail
+                        thumbnail = thumbnail,
+                        duration = duration,
+                        size = size,
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
                 }
 
-                DownloadButton(onClick = onDownloadClick)
+                DownloadButton(
+                    language = language,
+                    onClick = onDownloadClick
+                )
 
                 Spacer(modifier = Modifier.height(14.dp))
 
@@ -536,10 +628,46 @@ fun HomePage(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    SmallIconCard(Icons.Default.PlayCircle, "YouTube", Color.Red)
-                    SmallIconCard(Icons.Default.MusicNote, "MP3", Color.Magenta)
-                    SmallIconCard(Icons.Default.CameraAlt, "Instagram", Color(0xFFFF9800))
-                    SmallIconCard(Icons.Default.Facebook, "Facebook", Color(0xFF1877F2))
+                    SmallIconCard(
+                        Icons.Default.PlayCircle,
+                        "YouTube",
+                        Color.Red
+                    ) {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://youtube.com")
+                        )
+                        context.startActivity(intent)
+                    }
+                    SmallIconCard(
+                        Icons.Default.MusicNote,
+                        "MP3",
+                        Color.Magenta
+                    ) {
+                        onMp3Click()
+                    }
+                    SmallIconCard(
+                        Icons.Default.CameraAlt,
+                        "Instagram",
+                        Color(0xFFFF9800)
+                    ) {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://instagram.com")
+                        )
+                        context.startActivity(intent)
+                    }
+                    SmallIconCard(
+                        Icons.Default.Facebook,
+                        "Facebook",
+                        Color(0xFF1877F2)
+                    ) {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse("https://facebook.com")
+                        )
+                        context.startActivity(intent)
+                    }
                 }
             }
         }
@@ -570,13 +698,23 @@ fun DownloadVideoAsSheet(
     title: String,
     site: String,
     thumbnail: String,
+    duration: String,
+    size: String,
     selected: String,
     onSelect: (String) -> Unit,
     onDownload: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(26.dp)) {
-
-        Text("Download video as", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(all = 24.dp)
+    ) {
+        Text(
+            text = "Download video as",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
 
         Spacer(modifier = Modifier.height(22.dp))
 
@@ -587,49 +725,91 @@ fun DownloadVideoAsSheet(
                 modifier = Modifier
                     .width(120.dp)
                     .height(75.dp)
-                    .background(Color.DarkGray, RoundedCornerShape(14.dp)),
+                    .background(Color.DarkGray, shape = RoundedCornerShape(14.dp)),
                 contentScale = ContentScale.Crop
             )
 
             Spacer(modifier = Modifier.width(16.dp))
 
-            Column {
-                Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(5.dp))
-                Text(site.lowercase(), color = Color.Gray, fontSize = 15.sp)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = site.lowercase(),
+                    color = Color.Gray,
+                    fontSize = 15.sp
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = "⏱ $duration • 💾 $size",
+                    color = Color.LightGray,
+                    fontSize = 13.sp
+                )
             }
         }
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        Text("Music", color = Color.Gray, fontSize = 20.sp)
+        Text(
+            "Music",
+            color = Color.Gray,
+            fontSize = 20.sp
+        )
 
-        DownloadFormatRow("🎵", "Fast MP3", "4.6 MB", selected) { onSelect("Fast MP3") }
-        DownloadFormatRow("🎶", "Classic MP3", "5.2 MB", selected) { onSelect("Classic MP3") }
+        DownloadFormatRow(icon = "🎵", name = "Fast MP3", size = "4.6 MB", selected = selected) {
+            onSelect("Fast MP3")
+        }
+        DownloadFormatRow(icon = "🎵", name = "Classic MP3", size = "5.2 MB", selected = selected) {
+            onSelect("Classic MP3")
+        }
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        Text("Video", color = Color.Gray, fontSize = 20.sp)
+        Text(
+            "Video",
+            color = Color.Gray,
+            fontSize = 20.sp
+        )
 
-        DownloadFormatRow("▶️", "Fast 360p", "5.0 MB", selected) { onSelect("Fast 360p") }
-        DownloadFormatRow("🎬", "High quality 720p", "13.9 MB", selected) { onSelect("High quality 720p") }
+        DownloadFormatRow(icon = "▶️", name = "Fast 360p", size = "5.0 MB", selected = selected) {
+            onSelect("Fast 360p")
+        }
+        DownloadFormatRow(icon = "📺", name = "High quality 720p", size = "13.9 MB", selected = selected) {
+            onSelect("High quality 720p")
+        }
 
         Divider(color = Color(0xFF2B2C44))
 
+        Spacer(modifier = Modifier.height(15.dp))
+
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 18.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("More formats", color = Color.White, fontSize = 18.sp)
-            Text("All  ›", color = Color.Gray, fontSize = 18.sp)
+            Text("All >", color = Color.Gray, fontSize = 18.sp)
         }
 
         Button(
             onClick = onDownload,
-            modifier = Modifier.fillMaxWidth().height(62.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp),
             shape = RoundedCornerShape(30.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC928))
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFFC928))
         ) {
             Text("Download", color = Color.Black, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }
@@ -637,7 +817,6 @@ fun DownloadVideoAsSheet(
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
-
 @Composable
 fun DownloadFormatRow(
     icon: String,
@@ -667,53 +846,108 @@ fun DownloadFormatRow(
 }
 
 @Composable
-fun VideoPreviewCard(title: String, thumbnail: String) {
+fun VideoPreviewCard(
+    language: String,
+    title: String,
+    thumbnail: String,
+    duration: String,
+    size: String
+) {
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(
             containerColor = Color(0xFF1B1C31)
         )
     ) {
 
-        Column(
-            modifier = Modifier.padding(14.dp)
-        ) {
+        Column {
 
-            AsyncImage(
-                model = thumbnail,
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(110.dp),
-                contentScale = ContentScale.Crop
-            )
+            Box {
 
-            Spacer(modifier = Modifier.height(8.dp))
+                AsyncImage(
+                    model = thumbnail,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(210.dp),
+                    contentScale = ContentScale.Crop
+                )
 
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(12.dp)
+                        .background(
+                            Color.Black.copy(alpha = 0.75f),
+                            RoundedCornerShape(10.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
 
-            Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = duration,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
 
-            Text(
-                text = "Ready to download",
-                color = Color.Gray,
-                fontSize = 13.sp
-            )
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+
+                    Icon(
+                        Icons.Default.VideoFile,
+                        contentDescription = null,
+                        tint = Color(0xFF4FC3F7),
+                        modifier = Modifier.size(18.dp)
+                    )
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    Text(
+                        text = size,
+                        color = Color.LightGray,
+                        fontSize = 13.sp
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-fun DownloadButton(onClick: () -> Unit) {
+fun DownloadButton(
+    language: String,
+    onClick: () -> Unit
+) {
+    var pressed by remember { mutableStateOf(false) }
     Button(
-        onClick = onClick,
+        onClick = {
+            pressed = true
+            onClick()
+
+            android.os.Handler().postDelayed({
+                pressed = false
+            }, 120)
+        },
         modifier = Modifier.fillMaxWidth().height(62.dp),
         shape = RoundedCornerShape(20.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
@@ -722,6 +956,13 @@ fun DownloadButton(onClick: () -> Unit) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .scale(if (pressed) 0.96f else 1f)
+                .shadow(
+                    elevation = 18.dp,
+                    shape = RoundedCornerShape(20.dp),
+                    ambientColor = Color(0xFFB84CFF),
+                    spotColor = Color(0xFF4FC3F7)
+                )
                 .background(
                     Brush.horizontalGradient(listOf(Color(0xFFB84CFF), Color(0xFF4F8CFF))),
                     RoundedCornerShape(20.dp)
@@ -731,18 +972,24 @@ fun DownloadButton(onClick: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Download, null, tint = Color.White)
                 Spacer(modifier = Modifier.width(12.dp))
-                Text("Download", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(tr(language, "Download"), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
 }
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsPage(
     downloads: SnapshotStateList<DownloadItem>,
+    language: String,
     onDelete: (DownloadItem) -> Unit
 ) {
     val context = LocalContext.current
+
+    var selectedItem by remember { mutableStateOf<DownloadItem?>(null) }
+    var showMenu by remember { mutableStateOf(false) }
+    var searchText by remember { mutableStateOf("") }
+    var selectedFilter by remember { mutableStateOf("All") }
 
     Column(
         modifier = Modifier
@@ -755,18 +1002,85 @@ fun DownloadsPage(
         Text("Downloads", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
 
         Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = searchText,
+            onValueChange = { searchText = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = {
+                Text("Search downloads...", color = Color.Gray)
+            },
+            leadingIcon = {
+                Icon(Icons.Default.Search, null, tint = Color.Gray)
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFFB84CFF),
+                unfocusedBorderColor = Color(0xFF4FC3F7),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                cursorColor = Color.White
+            )
+        )
 
-        if (downloads.isEmpty()) {
-            Text("No downloads yet", color = Color.Gray, fontSize = 18.sp)
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            listOf("All", "MP3", "MP4", "Completed").forEach { filter ->
+
+                Text(
+                    text = filter,
+                    color = if (selectedFilter == filter) Color.Black else Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .background(
+                            if (selectedFilter == filter) Color(0xFFFFC928) else Color(0xFF15162A),
+                            RoundedCornerShape(20.dp)
+                        )
+                        .clickable {
+                            selectedFilter = filter
+                        }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                )
+            }
         }
 
-        downloads.forEach { item ->
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (downloads.isEmpty()) {
+            Text(
+                tr(language, "no_downloads"),
+                color = Color.Gray,
+                fontSize = 18.sp
+            )
+        }
+
+        downloads.filter { item ->
+            val matchesSearch = item.title.contains(searchText, ignoreCase = true) ||
+                    item.format.contains(searchText, ignoreCase = true)
+            val matchesFilter = when (selectedFilter) {
+                "All" -> true
+                "MP3" -> item.format.contains("MP3", ignoreCase = true)
+                "MP4" -> item.format.contains("720p", ignoreCase = true) || item.format.contains("360p", ignoreCase = true)
+                "Completed" -> item.progress >= 100
+                else -> true
+            }
+            matchesSearch && matchesFilter
+        }.forEach { item ->
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF15162A)),
-                shape = RoundedCornerShape(14.dp)
+                    .padding(bottom = 10.dp)
+                    .shadow(
+                        elevation = 10.dp,
+                        shape = RoundedCornerShape(22.dp),
+                        ambientColor = Color(0xFF4FC3F7).copy(alpha = 0.25f),
+                        spotColor = Color(0xFFB84CFF).copy(alpha = 0.25f)
+                    ),
+                shape = RoundedCornerShape(22.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(8.dp),
@@ -775,10 +1089,63 @@ fun DownloadsPage(
                     AsyncImage(
                         model = item.thumbnail,
                         contentDescription = null,
-                        modifier = Modifier.width(80.dp).height(50.dp),
+                        modifier =
+                            if (item.format.contains("MP3"))
+                                Modifier
+                                    .size(58.dp)
+                                    .background(
+                                        Color(0xFF2B2C44),
+                                        RoundedCornerShape(50.dp)
+                                    )
+                            else
+                                Modifier
+                                    .width(80.dp)
+                                    .height(50.dp),
                         contentScale = ContentScale.Crop
                     )
+                    Box {
 
+                        AsyncImage(
+                            model = item.thumbnail,
+                            contentDescription = null,
+                            modifier =
+                                if (item.format.contains("MP3"))
+                                    Modifier
+                                        .size(58.dp)
+                                        .background(
+                                            Color(0xFF2B2C44),
+                                            RoundedCornerShape(50.dp)
+                                        )
+                                else
+                                    Modifier
+                                        .width(80.dp)
+                                        .height(50.dp),
+                            contentScale = ContentScale.Crop
+                        )
+
+                        Text(
+                            text =
+                                if (item.format.contains("MP3"))
+                                    "MP3"
+                                else
+                                    "MP4",
+
+                            color = Color.White,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .background(
+                                    if (item.format.contains("MP3"))
+                                        Color(0xFFB84CFF)
+                                    else
+                                        Color(0xFFFF9800),
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                     Spacer(modifier = Modifier.width(8.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
@@ -786,15 +1153,23 @@ fun DownloadsPage(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(item.format, color = Color(0xFF4FC3F7), fontSize = 11.sp)
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(item.size, color = Color.Gray, fontSize = 10.sp)
+                        Text(
+                            text = "${item.duration} • ${item.size}",
+                            color = Color.Gray,
+                            fontSize = 10.sp
+                        )
 
                         Spacer(modifier = Modifier.height(5.dp))
 
                         LinearProgressIndicator(
-                            progress = { item.progress / 100f },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = Color(0xFFFFC928),
-                            trackColor = Color(0xFF2B2C44)
+                            progress = item.progress / 100f,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(50)),
+                            color = Color(0xFFB84CFF),
+                            trackColor = Color(0xFF1B1C31),
+                            strokeCap = StrokeCap.Round
                         )
 
                         Spacer(modifier = Modifier.height(3.dp))
@@ -842,7 +1217,7 @@ fun DownloadsPage(
                         )
 
                         Spacer(modifier = Modifier.height(6.dp))
-
+if (item.progress >= 100)
                         Text(
                             text = "Open File",
                             color = Color(0xFF00E676),
@@ -891,64 +1266,47 @@ fun DownloadsPage(
                             }
                         )
                         Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = "Share File",
-                            color = Color(0xFF4FC3F7),
-                            fontSize = 11.sp,
-                            modifier = Modifier.clickable {
-
-                                try {
-
-                                    val file =
-                                        java.io.File(
+                        if (item.progress >= 100) {
+                            Text(
+                                text = "Share File",
+                                color = Color(0xFF4FC3F7),
+                                fontSize = 11.sp,
+                                modifier = Modifier.clickable {
+                                    try {
+                                        val file = java.io.File(
                                             Environment.getExternalStoragePublicDirectory(
                                                 Environment.DIRECTORY_MOVIES
                                             ),
                                             "RifiTube/${item.fileName}"
                                         )
 
-                                    val uri =
-                                        androidx.core.content.FileProvider.getUriForFile(
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(
                                             context,
                                             "${context.packageName}.provider",
                                             file
                                         )
 
-                                    val shareIntent = Intent(Intent.ACTION_SEND)
+                                        val shareIntent = Intent(Intent.ACTION_SEND)
+                                        shareIntent.type =
+                                            if (item.fileName.endsWith(".mp3")) "audio/*" else "video/*"
 
-                                    shareIntent.type =
-                                        if (item.fileName.endsWith(".mp3"))
-                                            "audio/*"
-                                        else
-                                            "video/*"
+                                        shareIntent.putExtra(Intent.EXTRA_STREAM, uri)
+                                        shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-                                    shareIntent.putExtra(
-                                        Intent.EXTRA_STREAM,
-                                        uri
-                                    )
-
-                                    shareIntent.addFlags(
-                                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                    )
-
-                                    context.startActivity(
-                                        Intent.createChooser(
-                                            shareIntent,
-                                            "Share via"
+                                        context.startActivity(
+                                            Intent.createChooser(shareIntent, "Share via")
                                         )
-                                    )
 
-                                } catch (e: Exception) {
-
-                                    Toast.makeText(
-                                        context,
-                                        "Share failed",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(
+                                            context,
+                                            "Share failed",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        }
                         Text(
                             text = if (item.progress >= 100) "Delete" else "Cancel",
                             color = Color.Red,
@@ -979,11 +1337,161 @@ fun DownloadsPage(
                     }
                 }
             }
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = null,
+                tint = Color.Gray,
+                modifier = Modifier
+                    .size(24.dp)
+                    .clickable {
+                        selectedItem = item
+                        showMenu = true
+                    }
+            )
+        }
+    }
+    if (showMenu && selectedItem != null) {
+
+        ModalBottomSheet(
+            onDismissRequest = {
+                showMenu = false
+            },
+            containerColor = Color(0xFF15162A)
+        ) {
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+
+                Text(
+                    text = selectedItem!!.title,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text(
+                    text = "Open File",
+                    color = Color(0xFF4FC3F7),
+                    fontSize = 18.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+
+                            try {
+
+                                val item = selectedItem!!
+
+                                val file = java.io.File(
+                                    Environment.getExternalStoragePublicDirectory(
+                                        Environment.DIRECTORY_MOVIES
+                                    ),
+                                    "RifiTube/${item.fileName}"
+                                )
+
+                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.provider",
+                                    file
+                                )
+
+                                val intent = Intent(Intent.ACTION_VIEW)
+
+                                intent.setDataAndType(
+                                    uri,
+                                    if (item.fileName.endsWith(".mp3"))
+                                        "audio/*"
+                                    else
+                                        "video/*"
+                                )
+
+                                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                                context.startActivity(intent)
+
+                            } catch (e: Exception) {
+
+                                Toast.makeText(
+                                    context,
+                                    "Cannot open file",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+
+                            showMenu = false
+                        }
+                        .padding(vertical = 12.dp)
+                )
+
+                Text(
+                    text = "Share",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            val item = selectedItem!!
+
+                            try {
+                                val file = java.io.File(
+                                    Environment.getExternalStoragePublicDirectory(
+                                        Environment.DIRECTORY_MOVIES
+                                    ),
+                                    "RifiTube/${item.fileName}"
+                                )
+
+                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.provider",
+                                    file
+                                )
+
+                                val shareIntent = Intent(Intent.ACTION_SEND)
+                                shareIntent.type =
+                                    if (item.fileName.endsWith(".mp3")) "audio/*" else "video/*"
+
+                                shareIntent.putExtra(Intent.EXTRA_STREAM, uri)
+                                shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                                context.startActivity(
+                                    Intent.createChooser(shareIntent, "Share via")
+                                )
+
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Share failed", Toast.LENGTH_SHORT).show()
+                            }
+
+                            showMenu = false
+                        }
+                        .padding(vertical = 12.dp)
+                )
+
+                Text(
+                    text = "Delete",
+                    color = Color.Red,
+                    fontSize = 18.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            onDelete(selectedItem!!)
+                            showMenu = false
+                        }
+                        .padding(vertical = 12.dp)
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+            }
         }
     }
 }
 @Composable
-fun HistoryPage(history: List<String>) {
+fun HistoryPage(history: List<String>,language: String) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -993,7 +1501,12 @@ fun HistoryPage(history: List<String>) {
         Spacer(modifier = Modifier.height(25.dp))
 
         Text(
-            "Search History",
+        text =
+            when (language) {
+                "Arabic" -> "السجل"
+                "French" -> "Historique"
+                else -> "History"
+            },
             color = Color.White,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold
@@ -1026,6 +1539,7 @@ fun HistoryPage(history: List<String>) {
 @Composable
 fun BottomNav(
     currentPage: String,
+    language: String,
     onPageChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1044,50 +1558,29 @@ fun BottomNav(
                     .size(74.dp)
                     .background(
                         Brush.verticalGradient(
-                            listOf(
-                                Color(0xFFB84CFF),
-                                Color(0xFF4F8CFF)
-                            )
+                            listOf(Color(0xFFB84CFF), Color(0xFF4F8CFF))
                         ),
                         RoundedCornerShape(22.dp)
                     )
-                    .clickable {
-                        onPageChange("Home")
-                    },
-
+                    .clickable { onPageChange("Home") },
                 contentAlignment = Alignment.Center
             ) {
-
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-
-                    Icon(
-                        Icons.Default.Home,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(30.dp)
-                    )
-
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Home, null, tint = Color.White, modifier = Modifier.size(30.dp))
                     Spacer(modifier = Modifier.height(2.dp))
-
-                    Text(
-                        text = "Home",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Home", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
-            BottomItem(Icons.Default.Download, "Downloads", if (currentPage == "Downloads") Color(0xFFB84CFF) else Color.Gray) {
+
+            BottomItem(Icons.Default.Download, tr(language, "downloads"), if (currentPage == "Downloads") Color(0xFFB84CFF) else Color.Gray) {
                 onPageChange("Downloads")
             }
 
-            BottomItem(Icons.Default.History, "History", if (currentPage == "History") Color(0xFFB84CFF) else Color.Gray) {
+            BottomItem(Icons.Default.History, tr(language, "history"), if (currentPage == "History") Color(0xFFB84CFF) else Color.Gray) {
                 onPageChange("History")
             }
 
-            BottomItem(Icons.Default.Settings, "Settings", if (currentPage == "Settings") Color(0xFFB84CFF) else Color.Gray) {
+            BottomItem(Icons.Default.Settings, tr(language, "settings"), if (currentPage == "Settings") Color(0xFFB84CFF) else Color.Gray) {
                 onPageChange("Settings")
             }
         }
@@ -1095,11 +1588,31 @@ fun BottomNav(
 }
 
 @Composable
-fun SmallIconCard(icon: ImageVector, title: String, iconColor: Color) {
+fun SmallIconCard(
+    icon: ImageVector,
+    title: String,
+    iconColor: Color,
+    onClick: () -> Unit
+) {
+    var pressed by remember { mutableStateOf(false) }
     Card(
-        modifier = Modifier.size(width = 72.dp, height = 78.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1B1C31))
+        modifier = Modifier
+            .size(width = 72.dp, height = 78.dp)
+            .scale(if (pressed) 0.95f else 1f)
+            .shadow(
+                elevation = 10.dp,
+                shape = RoundedCornerShape(18.dp),
+                ambientColor = iconColor.copy(alpha = 0.5f),
+                spotColor = iconColor
+            )
+            .clickable {
+                pressed = true
+                onClick()
+
+                android.os.Handler().postDelayed({
+                    pressed = false
+                }, 100)
+                }
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -1124,6 +1637,12 @@ fun BottomItem(
             modifier = Modifier
                 .scale(
                     if (color == Color(0xFFB84CFF)) 1.15f else 1f
+                )
+                .shadow(
+                    elevation = if (color == Color(0xFFB84CFF)) 12.dp else 0.dp,
+                    shape = RoundedCornerShape(16.dp),
+                    ambientColor = color,
+                    spotColor = color
                 )
                 .clickable { onClick() },
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1159,10 +1678,9 @@ suspend fun getDownloadUrl(originalLink: String, format: String): String {
         if (isDirectMediaLink(originalLink)) {
             return@withContext originalLink
         }
-
         try {
             val apiUrl =
-                "http://10.0.2.2:3000/download?url=${Uri.encode(originalLink)}"
+                "$API_BASE_URL/download?url=${Uri.encode(originalLink)}"
 
 
             val connection = URL(apiUrl).openConnection() as HttpURLConnection
@@ -1180,27 +1698,38 @@ suspend fun getDownloadUrl(originalLink: String, format: String): String {
         }
     }
 }
-suspend fun getVideoInfo(originalLink: String): Pair<String, String> {
+data class VideoInfo(
+    val title: String,
+    val thumbnail: String,
+    val duration: String,
+    val size: String
+)
+suspend fun getVideoInfo(originalLink: String): VideoInfo {
     return withContext(Dispatchers.IO) {
         try {
             val apiUrl =
-                "http://10.0.2.2:3000/download?url=${Uri.encode(originalLink)}"
+                "$API_BASE_URL/download?url=${Uri.encode(originalLink)}"
 
             val connection = URL(apiUrl).openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
 
             val response = connection.inputStream.bufferedReader().readText()
-
             val json = JSONObject(response)
 
-            val title = json.optString("title", "RifiTube Video")
-            val thumbnail = json.optString("thumbnail", "")
-
-            Pair(title, thumbnail)
+            VideoInfo(
+                title = json.optString("title", "RifiTube Video"),
+                thumbnail = json.optString("thumbnail", ""),
+                duration = json.optString("duration", "00:00"),
+                size = json.optString("size", "Unknown")
+            )
 
         } catch (e: Exception) {
-            Pair("RifiTube Video", "")
-            Pair("RifiTube Video", "")
+            VideoInfo(
+                title = "RifiTube Video",
+                thumbnail = "",
+                duration = "00:00",
+                size = "Unknown"
+            )
         }
     }
 }
@@ -1296,14 +1825,24 @@ fun trackDownloadProgress(
                                 speed = speedText,
                                 remaining = remainingText
                             )
-                        showDownloadNotification(
-                            context = context,
-                            title = downloads[itemIndex].title,
-                            progress = progress,
-                            speed = speedText,
-                            remaining = remainingText
+                        val prefs = context.getSharedPreferences(
+                            "rifitube_settings",
+                            Context.MODE_PRIVATE
                         )
 
+                        val notificationsEnabled =
+                            prefs.getBoolean("notifications", true)
+
+                        if (notificationsEnabled) {
+
+                            showDownloadNotification(
+                                context = context,
+                                title = downloads[itemIndex].title,
+                                progress = progress,
+                                speed = speedText,
+                                remaining = remainingText
+                            )
+                        }
                         lastTime = currentTime
                         lastBytes = bytesDownloaded.toLong()
 
@@ -1316,6 +1855,23 @@ fun trackDownloadProgress(
                     status == DownloadManager.STATUS_SUCCESSFUL ||
                     status == DownloadManager.STATUS_FAILED
                 ) {
+                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
+
+                        downloads[itemIndex] =
+                            downloads[itemIndex].copy(
+                                progress = 100,
+                                remaining = "Completed",
+                                speed = "Done"
+                            )
+
+                        Toast.makeText(
+                            context,
+                            "Download completed ✅",
+                            Toast.LENGTH_SHORT
+                        ).show()
+
+                        saveDownloads(context, downloads)
+                    }
                     downloading = false
                 }
             }
@@ -1349,7 +1905,48 @@ fun detectPlatform(link: String): String {
         else -> "Direct Link / Unknown"
     }
 }
+fun tr(language: String, key: String): String {
+    return when (language) {
+        "Arabic" -> when (key) {
+            "search_anything" -> "بحث عن أي شيء"
+            "subtitle" -> "فيديوهات YouTube، أغاني MP3، ستوريات Instagram، فيديوهات Facebook"
+            "paste_link" -> "لسق الرابط هنا..."
+            "download" -> "تحميل"
+            "downloads" -> "التحميلات"
+            "history" -> "السجل"
+            "settings" -> "الإعدادات"
+            "no_downloads" -> "لا توجد تحميلات بعد"
+            "ready" -> "جاهز للتحميل"
+            else -> key
+        }
 
+        "French" -> when (key) {
+            "search_anything" -> "Rechercher"
+            "subtitle" -> "Vidéos YouTube, musiques MP3, stories Instagram, vidéos Facebook"
+            "paste_link" -> "Collez le lien ici..."
+            "download" -> "Télécharger"
+            "downloads" -> "Téléchargements"
+            "history" -> "Historique"
+            "settings" -> "Paramètres"
+            "no_downloads" -> "Aucun téléchargement"
+            "ready" -> "Prêt à télécharger"
+            else -> key
+        }
+
+        else -> when (key) {
+            "search_anything" -> "Search anything"
+            "subtitle" -> "YouTube videos, MP3 songs,\nInstagram stories, Facebook videos"
+            "paste_link" -> "Paste direct link or API link..."
+            "download" -> "Download"
+            "downloads" -> "Downloads"
+            "history" -> "History"
+            "settings" -> "Settings"
+            "no_downloads" -> "No downloads yet"
+            "ready" -> "Ready to download"
+            else -> key
+        }
+    }
+}
 fun getFakeTitle(link: String): String {
     val l = link.lowercase()
     return when {
@@ -1362,17 +1959,45 @@ fun getFakeTitle(link: String): String {
 }
 @Composable
 fun SettingsPage(
+    language: String,
+    onLanguageChange: (String) -> Unit,
+    darkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit,
     onClearHistory: () -> Unit
 ) {
     val context = LocalContext.current
+
+    val prefs = context.getSharedPreferences(
+        "rifitube_settings",
+        Context.MODE_PRIVATE
+    )
+
+    var defaultQuality by remember {
+        mutableStateOf(prefs.getString("default_quality", "720p") ?: "720p")
+    }
+
+    var notifications by remember {
+        mutableStateOf(prefs.getBoolean("notifications", true))
+    }
+
+    var showLanguageDialog by remember { mutableStateOf(false) }
+    var showQualityDialog by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(top = 70.dp, start = 18.dp, end = 18.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(top = 70.dp, start = 18.dp, end = 18.dp, bottom = 120.dp)
     ) {
 
         Text(
-            text = "Settings",
+            text =
+                when (language) {
+                    "Arabic" -> "الإعدادات"
+                    "French" -> "Paramètres"
+                    else -> "Settings"
+                },
             color = Color.White,
             fontSize = 30.sp,
             fontWeight = FontWeight.Bold
@@ -1380,305 +2005,183 @@ fun SettingsPage(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .clickable {
-                    Toast.makeText(
-                        context,
-                        "Language: English",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF15162A)
-            ),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            SettingsItemContent("🌍", "Language", "English")
+        SettingsCard("🌍", "Language", language) {
+            showLanguageDialog = true
         }
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .clickable {
-                    Toast.makeText(
-                        context,
-                        "Dark mode already enabled",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF15162A)
-            ),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            SettingsItemContent("🌙", "Dark Mode", "Enabled")
+        SettingsCard("🌙", "Dark Mode", if (darkMode) "Enabled" else "Disabled") {
+            onDarkModeChange(!darkMode)
+            Toast.makeText(
+                context,
+                if (!darkMode) "Dark mode enabled" else "Dark mode disabled",
+                Toast.LENGTH_SHORT
+            ).show()
         }
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .clickable {
-                    Toast.makeText(
-                        context,
-                        "Folder: Movies/RifiTube",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF15162A)
-            ),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            SettingsItemContent("📁", "Download Folder", "Movies/RifiTube")
+        SettingsCard("📁", "Download Folder", "Movies/RifiTube") {
+            Toast.makeText(context, "Files save in Movies/RifiTube", Toast.LENGTH_SHORT).show()
         }
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .clickable {
-                    Toast.makeText(
-                        context,
-                        "Default quality: 720p",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF15162A)
-            ),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            SettingsItemContent("🎬", "Default Quality", "720p")
+        SettingsCard("🎬", "Default Quality", defaultQuality) {
+            showQualityDialog = true
         }
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .clickable {
-                    Toast.makeText(
-                        context,
-                        "Notifications enabled",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF15162A)
-            ),
-            shape = RoundedCornerShape(18.dp)
-        ) {
-            SettingsItemContent("🔔", "Notifications", "Enabled")
+        SettingsCard("🔔", "Notifications", if (notifications) "Enabled" else "Disabled") {
+
+            val newValue = !notifications
+
+            notifications = newValue
+
+            prefs.edit()
+                .putBoolean("notifications", newValue)
+                .apply()
+
+            Toast.makeText(
+                context,
+                if (newValue) "Notifications enabled"
+                else "Notifications disabled",
+                Toast.LENGTH_SHORT
+            ).show()
         }
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .clickable {
-                    onClearHistory()
 
-                    Toast.makeText(
-                        context,
+        SettingsCard("🧹", "Clear History", "Delete all history") {
+            onClearHistory()
+            Toast.makeText(context, "History cleared", Toast.LENGTH_SHORT).show()
+        }
 
-                        "History cleared",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
+        SettingsCard("📲", "Share App", "Invite friends") {
+            val shareIntent = Intent(Intent.ACTION_SEND)
+            shareIntent.type = "text/plain"
+            shareIntent.putExtra(
+                Intent.EXTRA_TEXT,
+                "Download RifiTube 🔥\nFast video & music downloader"
+            )
+            context.startActivity(Intent.createChooser(shareIntent, "Share App"))
+        }
 
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF15162A)
-            ),
+        SettingsCard("ℹ️", "About App", "RifiTube v1.0") {
+            showAboutDialog = true
+        }
+    }
 
-            shape = RoundedCornerShape(18.dp)
-        ) {
+    if (showLanguageDialog) {
+        AlertDialog(
+            onDismissRequest = { showLanguageDialog = false },
+            containerColor = Color(0xFF15162A),
+            title = { Text("Choose Language", color = Color.White) },
+            text = {
+                Column {
+                    Text("English", color = Color.White, modifier = Modifier.clickable {
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
+                        onLanguageChange("English")
 
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+                        prefs.edit()
+                            .putString("language", "English")
+                            .apply()
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                        showLanguageDialog = false
 
-                    Text(
-                        text = "🧹",
-                        fontSize = 24.sp
-                    )
+                    }.padding(10.dp))
 
-                    Spacer(modifier = Modifier.width(14.dp))
+                    Text("العربية", color = Color.White, modifier = Modifier.clickable {
 
-                    Column {
+                        onLanguageChange("Arabic")
 
+                        prefs.edit()
+                            .putString("language", "Arabic")
+                            .apply()
+
+                        showLanguageDialog = false
+
+                    }.padding(10.dp))
+
+                    Text("Français", color = Color.White, modifier = Modifier.clickable {
+
+                        onLanguageChange("French")
+
+                        prefs.edit()
+                            .putString("language", "French")
+                            .apply()
+
+                        showLanguageDialog = false
+
+                    }.padding(10.dp))
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    if (showQualityDialog) {
+        AlertDialog(
+            onDismissRequest = { showQualityDialog = false },
+            containerColor = Color(0xFF15162A),
+            title = { Text("Default Quality", color = Color.White) },
+            text = {
+                Column {
+                    listOf("360p", "720p", "MP3").forEach { quality ->
                         Text(
-                            text = "Clear History",
+                            quality,
                             color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                            modifier = Modifier
+                                .clickable {
+                                    defaultQuality = quality
 
-                        Spacer(modifier = Modifier.height(3.dp))
+                                    prefs.edit()
+                                        .putString("default_quality", quality)
+                                        .apply()
 
-                        Text(
-                            text = "Delete all history",
-                            color = Color.Gray,
-                            fontSize = 13.sp
+                                    showQualityDialog = false
+                                }
+                                .padding(10.dp)
                         )
                     }
                 }
+            },
+            confirmButton = {}
+        )
+    }
 
-                Icon(
-                    Icons.Default.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = Color.Gray
+    if (showAboutDialog) {
+        AlertDialog(
+            onDismissRequest = { showAboutDialog = false },
+            containerColor = Color(0xFF15162A),
+            title = {
+                Text("RifiTube", color = Color.White, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    text = "Version 1.0\n\nFast video & music downloader\n\nMade with ❤️ by\nAnass El Hadrati\n\n© 2026 RifiTube. All rights reserved.",
+                    color = Color.White,
+                    fontSize = 16.sp
                 )
-            }
-        }
-
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .clickable {
-
-                    val shareIntent = Intent(Intent.ACTION_SEND)
-
-                    shareIntent.type = "text/plain"
-
-                    shareIntent.putExtra(
-                        Intent.EXTRA_TEXT,
-                        "Download RifiTube 🔥\nFast video & MP3 downloader"
-                    )
-
-                    context.startActivity(
-                        Intent.createChooser(
-                            shareIntent,
-                            "Share App"
-                        )
-                    )
-                },
-
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF15162A)
-            ),
-
-            shape = RoundedCornerShape(18.dp)
-        ) {
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-
-                    Text(
-                        text = "📲",
-                        fontSize = 24.sp
-                    )
-
-                    Spacer(modifier = Modifier.width(14.dp))
-
-                    Column {
-
-                        Text(
-                            text = "Share App",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        Spacer(modifier = Modifier.height(3.dp))
-
-                        Text(
-                            text = "Invite friends",
-                            color = Color.Gray,
-                            fontSize = 13.sp
-                        )
-                    }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAboutDialog = false }) {
+                    Text("OK", color = Color(0xFF4FC3F7))
                 }
-
-                Icon(
-                    Icons.Default.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = Color.Gray
-                )
             }
-        }
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp)
-                .clickable {
-
-                    Toast.makeText(
-                        context,
-                        "RifiTube v1.0\nCreated by RifiTube Team 🚀",
-                        Toast.LENGTH_LONG
-                    ).show()
-                },
-
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF15162A)
-            ),
-
-            shape = RoundedCornerShape(18.dp)
-        ) {
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-
-                    Text(
-                        text = "ℹ️",
-                        fontSize = 24.sp
-                    )
-
-                    Spacer(modifier = Modifier.width(14.dp))
-
-                    Column {
-
-                        Text(
-                            text = "About App",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        Spacer(modifier = Modifier.height(3.dp))
-
-                        Text(
-                            text = "RifiTube v1.0",
-                            color = Color.Gray,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-
-                Icon(
-                    Icons.Default.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = Color.Gray
-                )
-            }
-        }
+        )
+    }
+}
+@Composable
+fun SettingsCard(
+    emoji: String,
+    title: String,
+    value: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 12.dp)
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF15162A)
+        ),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        SettingsItemContent(emoji, title, value)
     }
 }
 @Composable
@@ -1800,6 +2303,22 @@ fun SplashScreen() {
     var showSplash by remember {
         mutableStateOf(true)
     }
+    val scale = remember { Animatable(0.7f) }
+
+    LaunchedEffect(Unit) {
+
+        scale.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = 900,
+                easing = FastOutSlowInEasing
+            )
+        )
+
+        delay(2500)
+
+        showSplash = false
+    }
 
     LaunchedEffect(Unit) {
         delay(2500)
@@ -1824,7 +2343,8 @@ fun SplashScreen() {
         ) {
 
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.scale(scale.value)
             ) {
 
                 Box(
@@ -1832,21 +2352,30 @@ fun SplashScreen() {
                         .size(120.dp)
                         .background(
                             Brush.horizontalGradient(
-                                listOf(
-                                    Color(0xFFB84CFF),
-                                    Color(0xFF4F8CFF)
+                                colors = listOf(
+                                    Color(0xFF00E6FF),
+                                    Color(0xFF7A00FF)
                                 )
                             ),
-                            RoundedCornerShape(32.dp)
+                            shape = RoundedCornerShape(32.dp)
                         ),
                     contentAlignment = Alignment.Center
                 ) {
 
+                    Text(
+                        text = "R",
+                        color = Color.White,
+                        fontSize = 64.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+
                     Icon(
-                        Icons.Default.PlayArrow,
+                        imageVector = Icons.Default.PlayArrow,
                         contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(70.dp)
+                        tint = Color.Black,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .offset(x = 8.dp)
                     )
                 }
 
@@ -1899,10 +2428,16 @@ fun showDownloadNotification(
     val notification = NotificationCompat.Builder(context, channelId)
         .setSmallIcon(android.R.drawable.stat_sys_download)
         .setContentTitle(title)
-        .setContentText("$speed • $remaining")
+        .setContentText(
+            if (progress >= 100)
+                "Download completed ✅"
+            else
+                "$speed • $remaining"
+        )
         .setProgress(100, progress, false)
         .setOngoing(progress < 100)
         .setOnlyAlertOnce(true)
+        .setAutoCancel(progress >= 100)
         .build()
 
     notificationManager.notify(1001, notification)
