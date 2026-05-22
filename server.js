@@ -23,7 +23,8 @@ async function getVideoData(videoUrl) {
     getUrl: true,
     format: "18/best",
     noPlaylist: true,
-    youtubeSkipDashMainfest: true
+    youtubeSkipDashManifest: true,
+    forceIpv4: true
   });
 
   return {
