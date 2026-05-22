@@ -75,7 +75,13 @@ app.get("/download", async (req, res) => {
     });
   }
 });
-
+app.get("/update", (req, res) => {
+  res.json({
+    versionCode: 2,
+    versionName: "2.0",
+    apkUrl: "PUT_APK_LINK_HERE"
+  });
+});
 app.listen(PORT, () => {
   console.log(`RifiTube server running on port ${PORT}`);
 });
