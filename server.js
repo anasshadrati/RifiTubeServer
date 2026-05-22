@@ -28,7 +28,9 @@ async function getVideoData(videoUrl) {
 
   return {
     title: info.title || "RifiTube Video",
-    thumbnail: info.thumbnail || "",
+    thumbnail: info.thumbnail
+      ? info.thumbnail.replace("maxresdefault", "hqdefault")
+      : "",
     duration: info.duration_string || "00:00",
     size: info.filesize
       ? (info.filesize / 1024 / 1024).toFixed(1) + " MB"
