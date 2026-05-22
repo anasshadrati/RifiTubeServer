@@ -21,7 +21,7 @@ async function getVideoData(videoUrl) {
 
   const directUrl = await ytdlp(videoUrl, {
     getUrl: true,
-    format: "18/best",
+    format: "18/22/best[ext=mp4]/best",
     noPlaylist: true,
     youtubeSkipDashManifest: true,
     forceIpv4: true

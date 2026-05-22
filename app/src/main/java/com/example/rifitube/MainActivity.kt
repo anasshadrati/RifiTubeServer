@@ -13,6 +13,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.os.Build
+import android.app.AlertDialog
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -62,6 +63,7 @@ import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
@@ -150,11 +152,60 @@ fun loadDownloads(context: Context): MutableList<DownloadItem> {
 
     return list
 }
+fun checkForUpdates(context: Context) {
 
+    CoroutineScope(Dispatchers.IO).launch {
+
+        try {
+
+            val url = URL("https://rifitubeserver.onrender.com/update")
+            val connection = url.openConnection() as HttpURLConnection
+
+            connection.requestMethod = "GET"
+
+            val response =
+                connection.inputStream.bufferedReader().readText()
+
+            val json = JSONObject(response)
+
+            val latestVersion = json.getInt("versionCode")
+            val apkUrl = json.getString("apkUrl")
+
+            val currentVersion =
+                context.packageManager
+                    .getPackageInfo(context.packageName, 0)
+                    .versionCode
+
+            if (latestVersion > currentVersion) {
+
+                withContext(Dispatchers.Main) {
+
+                    AlertDialog.Builder(context)
+                        .setTitle("New Update")
+                        .setMessage("New version available")
+                        .setPositiveButton("Update") { _, _ ->
+
+                            val intent = Intent(Intent.ACTION_VIEW)
+                            intent.setData(Uri.parse(apkUrl))
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                            context.startActivity(intent)
+                        }
+                        .setNegativeButton("Later", null)
+                        .show()
+                }
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+}
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        checkForUpdates(this)
         setContent { SplashScreen() }
     }
 }
@@ -1666,6 +1717,15 @@ fun startRealDownload(context: Context, url: String, fileName: String): Long {
         .setMimeType(if (fileName.endsWith(".mp3")) "audio/mpeg" else "video/mp4")
         .setAllowedOverMetered(true)
         .setAllowedOverRoaming(true)
+    request.addRequestHeader(
+        "User-Agent",
+        "Mozilla/5.0"
+    )
+
+    request.addRequestHeader(
+        "Accept",
+        "*/*"
+    )
 
     val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
 
@@ -1674,28 +1734,34 @@ fun startRealDownload(context: Context, url: String, fileName: String): Long {
 
 suspend fun getDownloadUrl(originalLink: String, format: String): String {
     return withContext(Dispatchers.IO) {
+        repeat(3) { attempt ->
+            try {
+                val apiUrl =
+                    "$API_BASE_URL/download?url=${Uri.encode(originalLink)}"
 
-        if (isDirectMediaLink(originalLink)) {
-            return@withContext originalLink
+                val connection =
+                    URL(apiUrl).openConnection() as HttpURLConnection
+
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 60000
+                connection.readTimeout = 60000
+
+                val response =
+                    connection.inputStream.bufferedReader().readText()
+
+                val json = JSONObject(response)
+                val video = json.optString("video", "")
+
+                if (video.isNotBlank()) {
+                    return@withContext video
+                }
+
+            } catch (e: Exception) {
+                delay(2000)
+            }
         }
-        try {
-            val apiUrl =
-                "$API_BASE_URL/download?url=${Uri.encode(originalLink)}"
 
-
-            val connection = URL(apiUrl).openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-
-            val response = connection.inputStream.bufferedReader().readText()
-            val json = JSONObject(response)
-
-            val video = json.optString("video", "")
-
-            return@withContext video
-
-        } catch (e: Exception) {
-            return@withContext ""
-        }
+        ""
     }
 }
 data class VideoInfo(
@@ -1707,11 +1773,14 @@ data class VideoInfo(
 suspend fun getVideoInfo(originalLink: String): VideoInfo {
     return withContext(Dispatchers.IO) {
         try {
+            val encodedUrl = java.net.URLEncoder.encode(originalLink, "UTF-8")
             val apiUrl =
-                "$API_BASE_URL/download?url=${Uri.encode(originalLink)}"
+                "$API_BASE_URL/info?url=$encodedUrl"
 
             val connection = URL(apiUrl).openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
+            connection.connectTimeout = 60000
+            connection.readTimeout = 60000
 
             val response = connection.inputStream.bufferedReader().readText()
             val json = JSONObject(response)
