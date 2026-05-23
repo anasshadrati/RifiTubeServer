@@ -78,6 +78,64 @@ app.get("/preview", async (req, res) => {
   }
 
 });
+app.get("/formats", async (req, res) => {
+
+  const videoUrl = req.query.url;
+
+  if (!videoUrl) {
+    return res.status(400).json({
+      error: "Missing url"
+    });
+  }
+
+  try {
+
+    const info = await ytdlp(videoUrl, {
+      dumpSingleJson: true,
+      noPlaylist: true,
+      skipDownload: true
+    });
+
+    const formats =
+      (info.formats || [])
+        .filter(f =>
+          f.ext === "mp4" &&
+          f.height
+        )
+        .map(f => ({
+          quality: `${f.height}p`,
+          ext: f.ext,
+          filesize:
+            f.filesize
+              ? `${(f.filesize / 1024 / 1024).toFixed(1)} MB`
+              : "Unknown",
+          url: f.url
+        }))
+        .slice(-6);
+
+    formats.unshift({
+      quality: "MP3",
+      ext: "mp3",
+      filesize: "Audio",
+      url: videoUrl
+    });
+
+    res.json({
+      title: info.title,
+      thumbnail: info.thumbnail,
+      formats
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      error: "Formats failed",
+      details: String(err)
+    });
+
+  }
+
+});
 app.get("/info", async (req, res) => {
   const videoUrl = req.query.url;
 

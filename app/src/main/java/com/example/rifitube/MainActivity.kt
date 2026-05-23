@@ -64,6 +64,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import coil.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -237,6 +239,9 @@ fun RifiTubeApp() {
     var videoLink by remember {
         mutableStateOf(detectedUrl ?: "")
     }
+    var debounceJob by remember {
+        mutableStateOf<Job?>(null)
+    }
     var showOptions by remember {
         mutableStateOf(
             detectedUrl != null
@@ -255,6 +260,9 @@ fun RifiTubeApp() {
             "rifitube_settings",
             Context.MODE_PRIVATE
         )
+    var readyFormats by remember {
+        mutableStateOf(listOf<String>())
+    }
     var language by remember {
         mutableStateOf(
             prefs.getString("language", "English") ?: "English"
@@ -331,6 +339,11 @@ fun RifiTubeApp() {
 
     LaunchedEffect(videoLink) {
 
+        debounceJob?.cancel()
+
+        debounceJob = scope.launch {
+            delay(300)
+        }
         if (videoLink.isBlank()) {
             videoTitle = "RifiTube Video"
             thumbnailUrl = ""
@@ -353,13 +366,43 @@ fun RifiTubeApp() {
         videoDuration = "..."
         videoSize = "Loading..."
 
-        videoInfo = getVideoInfo(videoLink)
-        val info = videoInfo
+        val previewDeferred =
+            scope.async {
+                getPreviewInfo(videoLink)
+            }
 
-        videoTitle = info.title
-        thumbnailUrl = info.thumbnail
-        thumbnail = info.thumbnail
-        videoDuration = info.duration
+        val infoDeferred =
+            scope.async {
+                getVideoInfo(videoLink)
+            }
+
+        val preview = previewDeferred.await()
+
+        if (preview.thumbnail.isNotBlank()) {
+            thumbnailUrl = preview.thumbnail
+            thumbnail = preview.thumbnail
+        }
+
+        if (preview.title.isNotBlank()) {
+            videoTitle = preview.title
+        }
+
+        if (preview.duration.isNotBlank()) {
+            videoDuration = preview.duration
+        }
+
+        videoSize = "Loading..."
+
+        readyFormats = listOf(
+            "Classic MP3",
+            "360p MP4",
+            "720p HD"
+        )
+
+        val info = infoDeferred.await()
+
+        videoInfo = info
+
         videoSize = info.size
     }
 
@@ -726,7 +769,11 @@ fun HomePage(
 
                 if (title == "Loading video...") {
 
+                    Spacer(modifier = Modifier.height(14.dp))
+
                     ShimmerPreview()
+
+                    Spacer(modifier = Modifier.height(14.dp))
 
                 } else if (thumbnail.isNotBlank()) {
 
@@ -1929,6 +1976,12 @@ data class VideoInfo(
     val duration: String,
     val size: String
 )
+
+data class PreviewInfo(
+    val title: String,
+    val thumbnail: String,
+    val duration: String
+)
 data class CachedVideoInfo(
     val title: String,
     val thumbnail: String,
@@ -1936,7 +1989,74 @@ data class CachedVideoInfo(
     val size: String,
     val time: Long
 )
+val fastPreviewCache =
+    mutableMapOf<String, PreviewInfo>()
 val previewCache = mutableMapOf<String, CachedVideoInfo>()
+suspend fun getPreviewInfo(
+    originalLink: String
+): PreviewInfo {
+
+    return withContext(Dispatchers.IO) {
+        val cached = fastPreviewCache[originalLink]
+
+        if (cached != null) {
+            return@withContext cached
+        }
+
+        try {
+
+            val encodedUrl =
+                java.net.URLEncoder.encode(
+                    originalLink,
+                    "UTF-8"
+                )
+
+            val apiUrl =
+                "$API_BASE_URL/preview?url=$encodedUrl"
+
+            val connection =
+                URL(apiUrl).openConnection()
+                        as HttpURLConnection
+
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 15000
+            connection.readTimeout = 15000
+
+            val response =
+                connection.inputStream
+                    .bufferedReader()
+                    .readText()
+
+            val json = JSONObject(response)
+
+            val preview = PreviewInfo(
+                title = json.optString("title", "RifiTube Video"),
+                thumbnail = json.optString("thumbnail", ""),
+                duration = json.optString("duration", "00:00")
+            )
+
+            if (
+                preview.title != "RifiTube Video" &&
+                preview.thumbnail.isNotBlank()
+            ) {
+                fastPreviewCache[originalLink] = preview
+            }
+
+            preview
+
+        } catch (e: Exception) {
+
+            PreviewInfo(
+                title = "RifiTube Video",
+                thumbnail = "",
+                duration = "00:00"
+            )
+
+        }
+
+    }
+
+}
 suspend fun getVideoInfo(originalLink: String): VideoInfo {
     return withContext(Dispatchers.IO) {
         val cached = previewCache[originalLink]
