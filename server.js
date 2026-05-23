@@ -111,7 +111,14 @@ app.get("/formats", async (req, res) => {
               : "Unknown",
           url: f.url
         }))
-        .slice(-6);
+        .filter((value, index, self) =>
+          index === self.findIndex(
+            f => f.quality === value.quality
+          )
+        )
+        .filter(f =>
+          ["360p", "480p", "720p", "1080p"].includes(f.quality)
+        )
 
     formats.unshift({
       quality: "MP3",
