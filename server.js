@@ -39,7 +39,45 @@ async function getVideoData(videoUrl) {
     video: String(directUrl).trim()
   };
 }
+app.get("/preview", async (req, res) => {
 
+  const videoUrl = req.query.url;
+
+  if (!videoUrl) {
+    return res.status(400).json({
+      error: "Missing url"
+    });
+  }
+
+  try {
+
+    const info = await ytdlp(videoUrl, {
+      dumpSingleJson: true,
+      noPlaylist: true,
+      skipDownload: true
+    });
+
+    res.json({
+      title: info.title || "RifiTube Video",
+      thumbnail: info.thumbnail
+        ? info.thumbnail.replace(
+            "maxresdefault",
+            "hqdefault"
+          )
+        : "",
+      duration: info.duration_string || "00:00"
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      error: "Preview failed",
+      details: String(err)
+    });
+
+  }
+
+});
 app.get("/info", async (req, res) => {
   const videoUrl = req.query.url;
 
