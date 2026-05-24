@@ -17,6 +17,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.RifiTube">
+        <receiver
+            android:name="com.rifitube.app.DownloadActionReceiver"
+            android:exported="false" />
         <activity
             android:name="com.rifitube.app.MainActivity"
             android:exported="true"

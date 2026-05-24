@@ -48,6 +48,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.StrokeCap
@@ -94,6 +96,45 @@ data class DownloadItem(
     val paused: Boolean = false,
     val queued: Boolean = false,
 )
+data class VideoFormat(
+    val quality: String,
+    val ext: String,
+    val filesize: String,
+    val url: String
+)
+
+data class VideoInfo(
+    val title: String,
+    val thumbnail: String,
+    val duration: String,
+    val size: String
+)
+
+data class PreviewInfo(
+    val title: String,
+    val thumbnail: String,
+    val duration: String
+)
+
+data class CachedVideoInfo(
+    val title: String,
+    val thumbnail: String,
+    val duration: String,
+    val size: String,
+    val time: Long
+)
+
+fun detectPlatform(link: String): String {
+    val l = link.lowercase()
+    return when {
+        "youtube" in l || "youtu.be" in l -> "YouTube"
+        "instagram" in l -> "Instagram"
+        "facebook" in l || "fb.watch" in l -> "Facebook"
+        "tiktok" in l -> "TikTok"
+        link.isBlank() -> "Waiting for link..."
+        else -> "Direct Link / Unknown"
+    }
+}
 fun saveDownloads(context: Context, downloads: List<DownloadItem>) {
     val array = JSONArray()
 
@@ -174,6 +215,9 @@ fun checkForUpdates(context: Context) {
             val connection = url.openConnection() as HttpURLConnection
 
             connection.requestMethod = "GET"
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Connection", "close")
 
             val response =
                 connection.inputStream.bufferedReader().readText()
@@ -220,7 +264,7 @@ class MainActivity : ComponentActivity() {
         checkForUpdates(this)
         val detectedUrl =
             intent.getStringExtra("detected_url")
-        setContent { SplashScreen() }
+        setContent { RifiTubeApp() }
     }
 }
 
@@ -261,7 +305,7 @@ fun RifiTubeApp() {
             Context.MODE_PRIVATE
         )
     var readyFormats by remember {
-        mutableStateOf(listOf<String>())
+        mutableStateOf<List<VideoFormat>>(emptyList())
     }
     var language by remember {
         mutableStateOf(
@@ -375,7 +419,10 @@ fun RifiTubeApp() {
             scope.async {
                 getVideoInfo(videoLink)
             }
-
+        val formatsDeferred =
+            scope.async {
+                getFormats(videoLink)
+            }
         val preview = previewDeferred.await()
 
         if (preview.thumbnail.isNotBlank()) {
@@ -393,17 +440,14 @@ fun RifiTubeApp() {
 
         videoSize = "Loading..."
 
-        readyFormats = listOf(
-            "Classic MP3",
-            "360p MP4",
-            "720p HD"
-        )
 
         val info = infoDeferred.await()
 
         videoInfo = info
 
         videoSize = info.size
+
+        readyFormats = formatsDeferred.await()
     }
 
     Box(
@@ -535,6 +579,7 @@ fun RifiTubeApp() {
                 duration = videoDuration,
                 size = videoSize,
                 selected = selectedFormat,
+                formats = readyFormats,
 
 
                 onSelect = {
@@ -549,7 +594,23 @@ fun RifiTubeApp() {
 
                     scope.launch {
                         prepareProgress = 35
+                        val alreadyExists =
+                            downloads.any {
+                                it.originalLink == videoLink &&
+                                        it.format == selectedFormat
+                            }
 
+                        if (alreadyExists) {
+
+                            Toast.makeText(
+                                context,
+                                "Already in downloads",
+                                Toast.LENGTH_SHORT
+                            ).show()
+
+                            isLoading = false
+                            return@launch
+                        }
                         val finalUrl =
                             getDownloadUrl(videoLink, selectedFormat)
                         prepareProgress = 70
@@ -575,7 +636,7 @@ fun RifiTubeApp() {
                         val fileName =
                             "RifiTube_${System.currentTimeMillis()}.$extension"
                         prepareProgress= 90
-                        val shouldQueue = hasActiveDownload(downloads)
+                        val shouldQueue = false
 
                         val downloadId =
                             if (shouldQueue) {
@@ -790,17 +851,6 @@ fun HomePage(
                     Spacer(modifier = Modifier.height(14.dp))
                 }
 
-                    VideoPreviewCard(
-                        language = language,
-                        title = title,
-                        thumbnail = thumbnail,
-                        duration = duration,
-                        size = size,
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                }
-
                 DownloadButton(
                     language = language,
                     onClick = onDownloadClick
@@ -876,6 +926,7 @@ fun HomePage(
             }
         }
     }
+}
 @Composable
 fun DownloadVideoAsSheet(
     title: String,
@@ -884,6 +935,7 @@ fun DownloadVideoAsSheet(
     duration: String,
     size: String,
     selected: String,
+    formats: List<VideoFormat>,
     onSelect: (String) -> Unit,
     onDownload: () -> Unit
 ) {
@@ -949,26 +1001,25 @@ fun DownloadVideoAsSheet(
             fontSize = 20.sp
         )
 
-        DownloadFormatRow(icon = "🎵", name = "Fast MP3", size = "4.6 MB", selected = selected) {
-            onSelect("Fast MP3")
-        }
-        DownloadFormatRow(icon = "🎵", name = "Classic MP3", size = "5.2 MB", selected = selected) {
-            onSelect("Classic MP3")
-        }
+        formats.forEach { format ->
 
-        Spacer(modifier = Modifier.height(18.dp))
+            DownloadFormatRow(
+                icon =
+                    if (format.ext == "mp3") "🎵"
+                    else "📺",
 
-        Text(
-            "Video",
-            color = Color.Gray,
-            fontSize = 20.sp
-        )
+                name = format.quality,
 
-        DownloadFormatRow(icon = "▶️", name = "Fast 360p", size = "5.0 MB", selected = selected) {
-            onSelect("Fast 360p")
-        }
-        DownloadFormatRow(icon = "📺", name = "High quality 720p", size = "13.9 MB", selected = selected) {
-            onSelect("High quality 720p")
+                size = format.filesize,
+
+                selected = selected
+
+            ) {
+
+                onSelect(format.quality)
+
+            }
+
         }
 
         Divider(color = Color(0xFF2B2C44))
@@ -992,7 +1043,7 @@ fun DownloadVideoAsSheet(
                 .fillMaxWidth()
                 .height(62.dp),
             shape = RoundedCornerShape(30.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFFC928))
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC928))
         ) {
             Text("Download", color = Color.Black, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }
@@ -1155,7 +1206,7 @@ fun DownloadButton(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Download, null, tint = Color.White)
                 Spacer(modifier = Modifier.width(12.dp))
-                Text(tr(language, "Download"), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(tr(language, "download"), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -1396,6 +1447,15 @@ fun DownloadsPage(
 
                                         manager.remove(item.downloadId)
 
+                                        showDownloadNotification(
+                                            context = context,
+                                            title = item.title,
+                                            progress = item.progress,
+                                            speed = "Paused",
+                                            remaining = "Paused",
+                                            downloadId = item.downloadId
+                                        )
+
                                         downloads[index] =
                                             item.copy(
                                                 paused = true,
@@ -1411,6 +1471,7 @@ fun DownloadsPage(
                                             item.copy(
                                                 downloadId = newId,
                                                 paused = false,
+                                                queued = false,
                                                 progress = item.progress,
                                                 speed = "Connecting...",
                                                 remaining = "Resuming..."
@@ -1869,13 +1930,126 @@ fun BottomItem(
         Text(text, color = color, fontSize = 12.sp)
         }
 }
+fun showDownloadNotification(
+    context: Context,
+    title: String,
+    progress: Int,
+    speed: String,
+    remaining: String,
+    downloadId: Long
+) {
 
+    val channelId = "rifitube_downloads"
+
+    val notificationManager =
+        context.getSystemService(Context.NOTIFICATION_SERVICE)
+                as NotificationManager
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+
+        val channel = NotificationChannel(
+            channelId,
+            "RifiTube Downloads",
+            NotificationManager.IMPORTANCE_LOW
+        )
+
+        notificationManager.createNotificationChannel(channel)
+    }
+
+    // PAUSE
+    val pauseIntent =
+        Intent(context, DownloadActionReceiver::class.java).apply {
+
+            putExtra("action", "pause")
+            putExtra("downloadId", downloadId)
+        }
+
+    val pausePendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            1,
+            pauseIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+    // CANCEL
+    val cancelIntent =
+        Intent(context, DownloadActionReceiver::class.java).apply {
+
+            putExtra("action", "cancel")
+            putExtra("downloadId", downloadId)
+        }
+
+    val cancelPendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            2,
+            cancelIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+    val notification =
+        NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(title)
+            .setContentText("$speed • $remaining")
+            .setProgress(100, progress, false)
+            .setOngoing(progress < 100)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+
+            .addAction(
+                android.R.drawable.ic_media_pause,
+                "Pause",
+                pausePendingIntent
+            )
+
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Cancel",
+                cancelPendingIntent
+            )
+
+            .build()
+
+    notificationManager.notify(9001, notification)
+}
+
+
+
+
+fun showDownloadCompletedNotification(
+    context: Context,
+    title: String
+) {
+    val channelId = "rifitube_downloads"
+
+    val notificationManager =
+        context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    val notification =
+        NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Download completed ✅")
+            .setContentText(title)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+
+    notificationManager.notify(9002, notification)
+}
 fun startRealDownload(context: Context, url: String, fileName: String): Long {
 
     val request = DownloadManager.Request(Uri.parse(url))
         .setTitle(fileName)
         .setDescription("Downloading with RifiTube...")
         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        .setAllowedOverMetered(true)
+        .setAllowedOverRoaming(true)
+        .setVisibleInDownloadsUi(true)
+        .setTitle(fileName)
+        .setDescription("Downloading with RifiTube 🔥")
+
         .setDestinationInExternalPublicDir(
             Environment.DIRECTORY_MOVIES,
             "RifiTube/$fileName"
@@ -1931,64 +2105,86 @@ fun retryDownload(
 
     return manager.enqueue(request)
 }
-fun hasActiveDownload(downloads: List<DownloadItem>): Boolean {
-    return downloads.any {
-        !it.queued &&
-                !it.paused &&
-                it.progress in 1..99
-    }
-}
-suspend fun getDownloadUrl(originalLink: String, format: String): String {
+suspend fun getDownloadUrl(
+    originalLink: String,
+    format: String
+): String {
+
     return withContext(Dispatchers.IO) {
-        repeat(3) { attempt ->
-            try {
+
+        try {
+
+            val encodedUrl =
+                java.net.URLEncoder.encode(
+                    originalLink,
+                    "UTF-8"
+                )
+
+            // MP3
+            if (format == "MP3") {
+
                 val apiUrl =
-                    "$API_BASE_URL/download?url=${Uri.encode(originalLink)}"
+                    "$API_BASE_URL/mp3?url=$encodedUrl"
 
                 val connection =
-                    URL(apiUrl).openConnection() as HttpURLConnection
+                    URL(apiUrl).openConnection()
+                            as HttpURLConnection
 
                 connection.requestMethod = "GET"
-                connection.connectTimeout = 60000
-                connection.readTimeout = 60000
 
                 val response =
-                    connection.inputStream.bufferedReader().readText()
+                    connection.inputStream
+                        .bufferedReader()
+                        .readText()
 
                 val json = JSONObject(response)
-                val video = json.optString("video", "")
 
-                if (video.isNotBlank()) {
-                    return@withContext video
-                }
-
-            } catch (e: Exception) {
-                delay(2000)
+                return@withContext json.getString("url")
             }
-        }
 
-        ""
+            // VIDEO FORMATS
+            val apiUrl =
+                "$API_BASE_URL/formats?url=$encodedUrl"
+
+            val connection =
+                URL(apiUrl).openConnection()
+                        as HttpURLConnection
+
+            connection.requestMethod = "GET"
+
+            val response =
+                connection.inputStream
+                    .bufferedReader()
+                    .readText()
+
+            val json = JSONObject(response)
+
+            val formats =
+                json.getJSONArray("formats")
+
+            for (i in 0 until formats.length()) {
+
+                val item =
+                    formats.getJSONObject(i)
+
+                val quality =
+                    item.getString("quality")
+
+                if (quality == format) {
+
+                    return@withContext item.getString("url")
+                }
+            }
+
+            ""
+
+        } catch (e: Exception) {
+
+            ""
+
+        }
     }
 }
-data class VideoInfo(
-    val title: String,
-    val thumbnail: String,
-    val duration: String,
-    val size: String
-)
-
-data class PreviewInfo(
-    val title: String,
-    val thumbnail: String,
-    val duration: String
-)
-data class CachedVideoInfo(
-    val title: String,
-    val thumbnail: String,
-    val duration: String,
-    val size: String,
-    val time: Long
-)
 val fastPreviewCache =
     mutableMapOf<String, PreviewInfo>()
 val previewCache = mutableMapOf<String, CachedVideoInfo>()
@@ -2019,6 +2215,9 @@ suspend fun getPreviewInfo(
                         as HttpURLConnection
 
             connection.requestMethod = "GET"
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Connection", "close")
             connection.connectTimeout = 15000
             connection.readTimeout = 15000
 
@@ -2082,6 +2281,9 @@ suspend fun getVideoInfo(originalLink: String): VideoInfo {
 
             val connection = URL(apiUrl).openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Connection", "close")
             connection.connectTimeout = 60000
             connection.readTimeout = 60000
 
@@ -2131,6 +2333,74 @@ suspend fun getVideoInfo(originalLink: String): VideoInfo {
         }
     }
 }
+suspend fun getFormats(
+    originalLink: String
+): List<VideoFormat> {
+
+    return withContext(Dispatchers.IO) {
+
+        try {
+
+            val encodedUrl =
+                java.net.URLEncoder.encode(
+                    originalLink,
+                    "UTF-8"
+                )
+
+            val apiUrl =
+                "$API_BASE_URL/formats?url=$encodedUrl"
+
+            val connection =
+                URL(apiUrl)
+                    .openConnection() as HttpURLConnection
+
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Connection", "close")
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val response =
+                connection.inputStream
+                    .bufferedReader()
+                    .readText()
+
+            val json = JSONObject(response)
+
+            val formatsJson =
+                json.getJSONArray("formats")
+
+            val formats =
+                mutableListOf<VideoFormat>()
+
+            for (i in 0 until formatsJson.length()) {
+
+                val item =
+                    formatsJson.getJSONObject(i)
+
+                formats.add(
+                    VideoFormat(
+                        quality = item.getString("quality"),
+                        ext = item.getString("ext"),
+                        filesize = item.getString("filesize"),
+                        url = item.getString("url")
+                    )
+                )
+
+            }
+
+            formats
+
+        } catch (e: Exception) {
+
+            emptyList()
+
+        }
+
+    }
+
+}
 fun trackDownloadProgress(
     context: Context,
     downloadId: Long,
@@ -2151,7 +2421,7 @@ fun trackDownloadProgress(
             if (itemIndex >= downloads.size) break
 
             if (downloads[itemIndex].paused) {
-                Thread.sleep(500)
+                Thread.sleep(350)
                 continue
             }
 
@@ -2219,12 +2489,18 @@ fun trackDownloadProgress(
                             continue
                         }
 
+                        val oldProgress = downloads[itemIndex].progress
+
+                        val smoothProgress =
+                            when {
+                                progress >= 100 -> 99
+                                progress > oldProgress -> oldProgress + 1
+                                else -> oldProgress
+                            }
+
                         downloads[itemIndex] =
                             downloads[itemIndex].copy(
-                                progress = if (progress > downloads[itemIndex].progress)
-                                    downloads[itemIndex].progress + 1
-                                else
-                                    progress,
+                                progress = smoothProgress,
                                 speed = speedText,
                                 remaining = remainingText
                             )
@@ -2243,7 +2519,8 @@ fun trackDownloadProgress(
                                 title = downloads[itemIndex].title,
                                 progress = progress,
                                 speed = speedText,
-                                remaining = remainingText
+                                remaining = remainingText,
+                                downloadId = downloadId,
                             )
                         }
                         lastTime = currentTime
@@ -2258,11 +2535,38 @@ fun trackDownloadProgress(
                     status == DownloadManager.STATUS_SUCCESSFUL ||
                     status == DownloadManager.STATUS_FAILED
                 ) {
+                    if (status == DownloadManager.STATUS_FAILED) {
+
+                        val item = downloads[itemIndex]
+
+                        val newId =
+                            retryDownload(context, item)
+
+                        downloads[itemIndex] =
+                            item.copy(
+                                downloadId = newId,
+                                paused = false,
+                                queued = false,
+                                speed = "Retrying...",
+                                remaining = "Reconnecting..."
+                            )
+
+                        trackDownloadProgress(
+                            context = context,
+                            downloadId = newId,
+                            downloads = downloads,
+                            itemIndex = itemIndex
+                        )
+
+                        return@Thread
+                    }
                     if (status == DownloadManager.STATUS_SUCCESSFUL) {
 
                         downloads[itemIndex] =
                             downloads[itemIndex].copy(
                                 progress = 100,
+                                paused = false,
+                                queued = false,
                                 remaining = "Completed",
                                 speed = "Done"
                             )
@@ -2290,6 +2594,7 @@ fun trackDownloadProgress(
 
                             downloads[nextIndex] =
                                 nextItem.copy(
+                                    paused = false,
                                     queued = false,
                                     downloadId = newId
                                 )
@@ -2308,7 +2613,7 @@ fun trackDownloadProgress(
 
             cursor.close()
 
-            Thread.sleep(500)
+            Thread.sleep(150)
         }
     }.start()
 }
@@ -2322,18 +2627,6 @@ fun isDirectMediaLink(link: String): Boolean {
             l.contains(".mp3?") ||
             l.contains(".m4a?") ||
             l.contains(".webm?")
-}
-
-fun detectPlatform(link: String): String {
-    val l = link.lowercase()
-    return when {
-        "youtube" in l || "youtu.be" in l -> "YouTube"
-        "instagram" in l -> "Instagram"
-        "facebook" in l || "fb.watch" in l -> "Facebook"
-        "tiktok" in l -> "TikTok"
-        link.isBlank() -> "Waiting for link..."
-        else -> "Direct Link / Unknown"
-    }
 }
 fun tr(language: String, key: String): String {
     return when (language) {
@@ -2788,24 +3081,16 @@ fun ShimmerPreview() {
     }
 }
 @Composable
-fun BrowserPage(
-    language: String
-) {
-
+fun BrowserPage(language: String) {
     val context = LocalContext.current
-
-    var url by remember {
-        mutableStateOf("https://www.google.com")
-    }
+    var url by remember { mutableStateOf("https://www.google.com") }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .padding(bottom = 80.dp)
     ) {
-
         Column {
-
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
@@ -2814,63 +3099,49 @@ fun BrowserPage(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp),
-                placeholder = {
-                    Text(
-                        "Enter website...",
-                        color = Color.Gray
-                    )
-                },
+                placeholder = { Text("Enter website...", color = Color.Gray) },
                 singleLine = true,
-                shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFFB84CFF),
-                    unfocusedBorderColor = Color(0xFF4FC3F7),
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    cursorColor = Color.White
-                )
+                shape = RoundedCornerShape(16.dp)
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
             AndroidView(
                 factory = {
-
                     android.webkit.WebView(context).apply {
-
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.loadsImagesAutomatically = true
-                        settings.allowFileAccess = true
                         settings.useWideViewPort = true
                         settings.loadWithOverviewMode = true
 
                         setDownloadListener { detectedUrl, _, _, _, _ ->
+                            if (
+                                detectedUrl.contains(".mp4") ||
+                                detectedUrl.contains(".m3u8") ||
+                                detectedUrl.contains(".mp3") ||
+                                detectedUrl.contains("video") ||
+                                detectedUrl.contains("media") ||
+                                detectedUrl.contains("cdn") ||
+                                detectedUrl.contains("blob")
+                            ) {
+                                val downloadIntent =
+                                    Intent(context, MainActivity::class.java)
 
-                            Toast.makeText(
-                                context,
-                                "Video detected 🔥",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                                downloadIntent.putExtra(
+                                    "detected_url",
+                                    detectedUrl
+                                )
 
-                            val downloadIntent =
-                                Intent(context, MainActivity::class.java)
+                                downloadIntent.addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK
+                                )
 
-                            downloadIntent.putExtra(
-                                "detected_url",
-                                detectedUrl
-                            )
-
-                            downloadIntent.addFlags(
-                                Intent.FLAG_ACTIVITY_NEW_TASK
-                            )
-
-                            context.startActivity(downloadIntent)
+                                context.startActivity(downloadIntent)
+                            }
                         }
 
-                        webViewClient =
-                            android.webkit.WebViewClient()
-
+                        webViewClient = android.webkit.WebViewClient()
                         loadUrl(url)
                     }
                 },
@@ -2880,102 +3151,8 @@ fun BrowserPage(
                 modifier = Modifier.fillMaxSize()
             )
         }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(18.dp)
-                .size(65.dp)
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(
-                            Color(0xFFB84CFF),
-                            Color(0xFF4FC3F7)
-                        )
-                    ),
-                    RoundedCornerShape(50.dp)
-                )
-                .clickable {
-
-                    Toast.makeText(
-                        context,
-                        "Detecting media 🔥",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                },
-            contentAlignment = Alignment.Center
-        ) {
-
-            Icon(
-                Icons.Default.Download,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(32.dp)
-            )
-        }
     }
-
-        AndroidView(
-            factory = {
-
-                android.webkit.WebView(context).apply {
-
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.loadsImagesAutomatically = true
-                    settings.allowFileAccess = true
-                    settings.useWideViewPort = true
-                    settings.loadWithOverviewMode = true
-
-                    setDownloadListener { url, _, _, _, _ ->
-
-                        Toast.makeText(
-                            context,
-                            "Download detected 🔥",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                        val intent =
-                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
-
-                        context.startActivity(intent)
-                    }
-
-                    setDownloadListener { detectedUrl, _, _, _, _ ->
-
-                        Toast.makeText(
-                            context,
-                            "Video detected 🔥",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                        val downloadIntent =
-                            Intent(context, MainActivity::class.java)
-
-                        downloadIntent.putExtra(
-                            "detected_url",
-                            detectedUrl
-                        )
-
-                        downloadIntent.addFlags(
-                            Intent.FLAG_ACTIVITY_NEW_TASK
-                        )
-
-                        context.startActivity(downloadIntent)
-                    }
-
-                    webViewClient =
-                        android.webkit.WebViewClient()
-
-                    loadUrl(url)
-                }
-            },
-            update = {
-                it.loadUrl(url)
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-    }
+}
 @Composable
 fun SplashScreen() {
 
@@ -3081,43 +3258,4 @@ fun SplashScreen() {
 
         RifiTubeApp()
     }
-}
-fun showDownloadNotification(
-    context: Context,
-    title: String,
-    progress: Int,
-    speed: String,
-    remaining: String
-) {
-    val channelId = "rifitube_downloads"
-
-    val notificationManager =
-        context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val channel = NotificationChannel(
-            channelId,
-            "RifiTube Downloads",
-            NotificationManager.IMPORTANCE_LOW
-        )
-
-        notificationManager.createNotificationChannel(channel)
-    }
-
-    val notification = NotificationCompat.Builder(context, channelId)
-        .setSmallIcon(android.R.drawable.stat_sys_download)
-        .setContentTitle(title)
-        .setContentText(
-            if (progress >= 100)
-                "Download completed ✅"
-            else
-                "$speed • $remaining"
-        )
-        .setProgress(100, progress, false)
-        .setOngoing(progress < 100)
-        .setOnlyAlertOnce(true)
-        .setAutoCancel(progress >= 100)
-        .build()
-
-    notificationManager.notify(1001, notification)
 }
